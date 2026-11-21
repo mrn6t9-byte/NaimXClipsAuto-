@@ -68,6 +68,10 @@ on:
         description: "Words like: pre 30 wpre 30 post 15"
         required: false
         default: ""
+      feed:
+        description: "Test only: a live-score page link (Cricbuzz / Cricinfo ...). The bot tells you if it can read it."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -114,6 +118,7 @@ jobs:
       FILE_SIZE: ${{ inputs.size }}
       LINK: ${{ inputs.link }}
       CAPTION: ${{ inputs.caption }}
+      FEED_URL: ${{ inputs.feed }}
       OUT_DIR: /mnt/rec
       MP4_DIR: rec_mp4
     steps:
