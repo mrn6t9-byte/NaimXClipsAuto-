@@ -12,6 +12,20 @@ def E(k, d=""):
     return os.environ.get(k, d) or d
 
 
+#!/usr/bin/env python3
+"""Cricket clip bot (separate from the recorder).
+A video sent to the group (with an optional caption) is downloaded from Telegram (up to 2 GB), the score on the screen is read,
+and a clip is cut for every 4, 6 and wicket and sent back into the same group as a reply to the video.
+
+Caption words (all optional):  pre 30   wpre 30   post 15     (seconds before a 4/6, before a wicket, after the ball)
+"""
+import os, sys, re, json, time, glob, shutil, subprocess, threading, queue, urllib.request, urllib.parse, urllib.error, asyncio
+
+
+def E(k, d=""):
+    return os.environ.get(k, d) or d
+
+
 TOKEN = E("TG_TOKEN"); CHAT = E("CHAT"); MSG = E("MSG"); FILE_ID = E("FILE_ID"); FILE_SIZE = int(E("FILE_SIZE") or 0)
 CAPTION = E("CAPTION"); API_ID = E("API_ID"); API_HASH = E("API_HASH")
 TG_API = E("TG_API") or "https://api.telegram.org"
@@ -466,7 +480,8 @@ def clip_cut(ev, avail):
 # ---------------------------- getting the video ----------------------------
 
 def telethon_download(dest):
-    """A video sent to the bot (up to 2 GB) through Telegram's own protocol; the Bot API itself stops at 20 MB."""
+    """A video sent to the bot (up to 2 GB) through Telegram's own protocol; the Bot API itself stops at 20 MB.
+    The message is fetched by its number (works in the private chat with the bot); the old file-id way is the backup."""
     if not (API_ID and API_HASH):
         raise RuntimeError("API_ID / API_HASH secrets are not set")
     try:
@@ -479,60 +494,97 @@ def telethon_download(dest):
         c = TelegramClient(MemorySession(), int(API_ID), API_HASH)
         await c.start(bot_token=TOKEN)
         try:
-            media = utils.resolve_bot_file_id(FILE_ID)
+            media, size, why = None, FILE_SIZE, []
+            if MSG:
+                try:
+                    m = await c.get_messages(None, ids=int(MSG))
+                    if m is not None and getattr(m, "media", None):
+                        media = m.media
+                        size = getattr(getattr(m, "document", None), "size", 0) or size
+                    else:
+                        why.append("message not found")
+                except Exception as e:
+                    why.append("message: " + repr(e)[:80])
+            if media is None and FILE_ID:
+                try:
+                    media = utils.resolve_bot_file_id(FILE_ID)
+                    if media is None:
+                        why.append("file id not understood")
+                except Exception as e:
+                    why.append("file id: " + repr(e)[:80])
             if media is None:
-                raise RuntimeError("the file id was not understood")
+                raise RuntimeError("could not find the video through Telegram (%s). Send it in a private chat with the bot" % "; ".join(why))
             got, last = 0, time.time()
             with open(dest, "wb") as f:
-                async for chunk in c.iter_download(media, request_size=1024 * 1024, file_size=FILE_SIZE or None):
+                async for chunk in c.iter_download(media, request_size=1024 * 1024, file_size=size or None):
                     f.write(chunk); got += len(chunk)
                     if time.time() - last > 30:
-                        last = time.time(); print("Downloaded %s of %s" % (human(got), human(FILE_SIZE or got)), flush=True)
+                        last = time.time(); print("Downloaded %s of %s" % (human(got), human(size or got)), flush=True)
+            if got < 100000:
+                raise RuntimeError("Telegram sent an empty file")
         finally:
             await c.disconnect()
     asyncio.run(go())
 
 
 def gofile_resolve(url):
-    """Best effort: a gofile.io/d/<id> page -> [(direct link, name)] and the cookie the download needs."""
+    """Best effort (Gofile changes this now and then): gofile.io/d/<id> -> [(direct link, name)] and the cookie the download needs."""
+    import hashlib
     m = re.search(r"gofile\.io/d/([A-Za-z0-9]+)", url)
     if not m:
         return [], ""
     cid = m.group(1)
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
+
     def j(cmd):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        return json.loads(r.stdout or "{}")
-    tok = (j(["curl", "-sS", "-X", "POST", "https://api.gofile.io/accounts"]).get("data") or {}).get("token", "")
-    wt = "4fd6sg89d7s6"
-    try:
-        js = subprocess.run(["curl", "-sS", "https://gofile.io/dist/js/global.js"], capture_output=True, text=True, timeout=60).stdout
-        mm = re.search(r'appdata\.wt\s*=\s*"([^"]+)"', js)
-        if mm:
-            wt = mm.group(1)
-    except Exception:
-        pass
-    d = j(["curl", "-sS", "-H", "Authorization: Bearer " + tok, "https://api.gofile.io/contents/%s?wt=%s" % (cid, wt)]).get("data") or {}
+        try:
+            return json.loads(r.stdout or "{}")
+        except Exception:
+            return {}
+    tk = j(["curl", "-sS", "-A", ua, "-X", "POST", "-H", "Content-Type: application/json", "-d", "{}", "https://api.gofile.io/accounts"])
+    tok = (tk.get("data") or {}).get("token", "")
+    secrets = [E("GOFILE_WT_SECRET")] if E("GOFILE_WT_SECRET") else []
+    secrets += ["12af056dacea0b"]          # the value in use in the public gofile downloader tools; it can change: then set the GOFILE_WT_SECRET secret
+    d, err = {}, ""
+    for sec in secrets:
+        wt = hashlib.sha256(("%s::en-US::%s::%d::%s" % (ua, tok, int(time.time()) // 14400, sec)).encode()).hexdigest()
+        r = j(["curl", "-sS", "-A", ua, "-H", "Authorization: Bearer " + tok, "-H", "X-Website-Token: " + wt, "-H", "X-BL: en-US",
+               "https://api.gofile.io/contents/%s?cache=true&sortField=createTime&sortDirection=1" % cid])
+        if r.get("status") == "ok":
+            d = r.get("data") or {}; break
+        err = str(r.get("status") or "no answer")
+        if "password" in err.lower():
+            break
+    if not d:
+        raise RuntimeError("Gofile said: %s" % err)
     files = []
+
     def walk(node):
-        for ch in (node.get("children") or {}).values():
-            if ch.get("type") == "file" and (ch.get("mimetype") or "").startswith("video") and ch.get("link"):
+        for ch in (node.get("children") or node.get("contents") or {}).values():
+            if ch.get("type") == "file" and ch.get("link") and (str(ch.get("mimetype") or "").startswith("video") or FILE_EXT.search(ch.get("name") or "")):
                 files.append((ch["link"], ch.get("name") or "video.mp4"))
             elif ch.get("type") == "folder":
                 walk(ch)
+    if d.get("type") == "file" and d.get("link"):
+        files.append((d["link"], d.get("name") or "video.mp4"))
     walk(d)
+    if not files:
+        raise RuntimeError("Gofile page has no video file")
     return files, "accountToken=" + tok
 
 
 def link_download(url, dest):
     cookie = ""
     if "gofile.io/d/" in url:
-        files, cookie = gofile_resolve(url)
-        if not files:
-            raise RuntimeError("Gofile did not give a download link (its page changed or the file is gone). Send a direct video link instead")
+        try:
+            files, cookie = gofile_resolve(url)
+        except RuntimeError as e:
+            raise RuntimeError("%s. Gofile changes its download system often; send a direct video link (.mp4) instead" % e)
         url = files[0][0]
-    cmd = ["curl", "-L", "-sS", "--fail", "--retry", "3", "--connect-timeout", "30", "-A", "Mozilla/5.0 (Linux; Android 10; K) Chrome/149.0 Mobile Safari/537.36", "-o", dest, url]
+    cmd = ["curl", "-L", "-sS", "--fail", "--retry", "3", "--connect-timeout", "30", "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36", "-o", dest, url]
     if cookie:
-        cmd[1:1] = ["-H", "Cookie: " + cookie]
+        cmd[1:1] = ["-H", "Cookie: " + cookie, "-H", "Authorization: Bearer " + cookie.split("=", 1)[1]]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError("download failed: " + (r.stderr or "").strip()[-150:])
