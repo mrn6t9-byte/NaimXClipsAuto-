@@ -94,6 +94,7 @@ jobs:
       API_HASH: ${{ secrets.API_HASH }}
       CLIP_CHAT: ${{ secrets.CLIP_CHAT }}      # optional: channel/group that gets the clips (else the chat that sent the video)
       PROXY: ${{ secrets.PROXY }}
+      GOFILE_WT_SECRET: ${{ secrets.GOFILE_WT_SECRET }}      # optional: only if Gofile changes its download system
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
