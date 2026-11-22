@@ -72,10 +72,6 @@ on:
         description: "Live score page link (Cricbuzz match page): names, ball-by-ball, dashboard details, and a 4/6/wicket the screen reading missed. Optional."
         required: false
         default: ""
-      feed_offset:
-        description: "Feed clock minus video clock in seconds (default -20). Only used when the screen shows no ball number. Clip starts too early: use a bigger number, too late: a smaller one."
-        required: false
-        default: "-20"
 
 permissions:
   contents: read
@@ -123,9 +119,6 @@ jobs:
       LINK: ${{ inputs.link }}
       CAPTION: ${{ inputs.caption }}
       FEED_URL: ${{ inputs.feed }}
-      FEED_OFFSET: ${{ inputs.feed_offset }}
-      FEED_EVERY: "2"                # seconds between two looks at the live score feed
-      CLIP_BIG_TIMEOUT: "420"        # seconds a big (original quality) upload may take before the clip is shrunk instead
       OUT_DIR: /mnt/rec
       MP4_DIR: rec_mp4
     steps:
