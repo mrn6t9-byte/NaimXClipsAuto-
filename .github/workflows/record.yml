@@ -44,6 +44,13 @@ on:
         description: "Stream links: optional website the link is played on"
         required: false
         default: ""
+      player:
+        description: "Stream links: normal = as always. hlsjs = the link opens only in a browser player: the bot opens it in a browser (hls.js) first and copies what the browser sends"
+        type: choice
+        options:
+          - normal
+          - hlsjs
+        default: normal
       chat:
         description: "Filled by the bot"
         required: false
@@ -112,6 +119,7 @@ jobs:
       PART_MB: ${{ inputs.part_mb }}
       PART_MIN: ${{ inputs.part_min }}
       REFERER: ${{ inputs.referer }}
+      PLAYER: ${{ inputs.player }}
       CHAT: ${{ inputs.chat }}
       MSG: ${{ inputs.msg }}
       FILE_ID: ${{ inputs.file_id }}
@@ -174,6 +182,13 @@ jobs:
           pip install -q --break-system-packages telethon
           pip install -q --break-system-packages cryptg && echo "cryptg ready (fast upload)" || echo "cryptg not installed: uploads are slower"
           tesseract --version | head -1
+      - name: Browser for hls.js mode (only when you chose hlsjs)
+        if: inputs.player == 'hlsjs'
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          pip install -q --break-system-packages playwright
+          (command -v google-chrome >/dev/null 2>&1 && google-chrome --version) || python3 -m playwright install --with-deps chromium
       - name: Use the second disk for recording
         run: sudo mkdir -p /mnt/rec && sudo chown "$USER" /mnt/rec
       - name: Cut the clips
